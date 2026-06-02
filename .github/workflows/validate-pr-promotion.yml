@@ -1,0 +1,164 @@
+# Git Flow PR Promotion Validation
+#
+# Validates that every pull request follows the allowed Git Flow promotion path
+# (source branch -> target branch) and FAILS the check when the path is invalid,
+# which blocks the merge.
+#
+# IMPORTANT: For this to actually block merges, add this check as a REQUIRED
+# status check in your branch protection rules / rulesets:
+#   Settings -> Rules -> Rulesets -> (your ruleset) -> Require status checks to pass
+#   -> add "validate-promotion" as a required check.
+# Without that, the check still runs and reports, but GitHub will allow merging
+# even when it is red.
+#
+# Allowed promotion paths (the ONLY valid PR source -> target pairs):
+#   feature/*  -> develop
+#   bugfix/*   -> develop
+#   hotfix/*   -> main
+#   develop    -> release/*
+#   release/*  -> main
+# Anything else fails with a clear, actionable error message.
+
+name: Validate PR Promotion
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    # Only long-lived target branches can receive PRs. release/** uses the
+    # ** glob so dynamic names like release/v1.4.0 are matched.
+    branches:
+      - main
+      - develop
+      - release/**
+
+# A PR re-run should cancel the previous in-flight run for the same PR.
+concurrency:
+  group: validate-pr-promotion-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-promotion:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate source -> target promotion path
+        shell: bash
+        env:
+          # head_ref = source branch (the branch being merged FROM).
+          # base_ref = target branch (the branch being merged INTO).
+          # Passed via env to avoid shell-injection from branch names.
+          SOURCE: ${{ github.head_ref }}
+          TARGET: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          # pass <rule>  -> green summary + success
+          pass() {
+            {
+              echo "## ✅ Promotion path valid"
+              echo ""
+              echo "\`$SOURCE\` → \`$TARGET\`"
+              echo ""
+              echo "**Rule:** $1"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ $SOURCE → $TARGET is a valid promotion path"
+            exit 0
+          }
+
+          # fail <heading> <rule> <fix> <log-message>
+          # Each argument is a single line so the YAML block scalar stays intact.
+          fail() {
+            {
+              echo "## ❌ $1"
+              echo ""
+              echo "| | |"
+              echo "|---|---|"
+              echo "| **Source** | \`$SOURCE\` |"
+              echo "| **Target** | \`$TARGET\` |"
+              echo ""
+              echo "**Rule:** $2"
+              echo ""
+              echo "**Fix:** $3"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::$4"
+            exit 1
+          }
+
+          echo "Source (head): $SOURCE"
+          echo "Target (base): $TARGET"
+
+          # --- Classify the SOURCE branch by its Git Flow prefix --------------
+          # Prefixes use the bash glob == operator. The /* allows nested names
+          # like feature/team-a/aml-screening (everything after the prefix).
+          case "$SOURCE" in
+            main)
+              # main is PRODUCTION; it is never a valid PR source.
+              fail "Promotion path BLOCKED" \
+                   "\`main\` is the production branch and is never a PR source." \
+                   "Open your PR from a feature/, bugfix/, hotfix/, or release/ branch instead." \
+                   "main cannot be a PR source. main is production-only."
+              ;;
+
+            feature/*)
+              # feature/* must always target develop.
+              if [[ "$TARGET" == "develop" ]]; then
+                pass "feature/* branches must target develop"
+              fi
+              fail "Promotion path BLOCKED" \
+                   "feature/* branches must target develop, not \`$TARGET\`." \
+                   "Change the PR base branch to develop." \
+                   "$SOURCE cannot target $TARGET. The allowed target for feature/* branches is develop."
+              ;;
+
+            bugfix/*)
+              # bugfix/* must always target develop.
+              if [[ "$TARGET" == "develop" ]]; then
+                pass "bugfix/* branches must target develop"
+              fi
+              fail "Promotion path BLOCKED" \
+                   "bugfix/* branches must target develop, not \`$TARGET\`." \
+                   "Change the PR base branch to develop." \
+                   "$SOURCE cannot target $TARGET. The allowed target for bugfix/* branches is develop."
+              ;;
+
+            hotfix/*)
+              # hotfix/* goes straight to main (urgent production fix).
+              if [[ "$TARGET" == "main" ]]; then
+                pass "hotfix/* branches must target main"
+              fi
+              fail "Promotion path BLOCKED" \
+                   "hotfix/* branches must target main, not \`$TARGET\`." \
+                   "Change the PR base branch to main." \
+                   "$SOURCE cannot target $TARGET. The allowed target for hotfix/* branches is main."
+              ;;
+
+            develop)
+              # develop is promoted into a release/* branch, never directly to main.
+              # release/* glob matches dynamic names like release/v1.4.0.
+              if [[ "$TARGET" == release/* ]]; then
+                pass "develop must target a release/* branch"
+              fi
+              fail "Promotion path BLOCKED" \
+                   "develop must target a release/* branch, not \`$TARGET\` directly." \
+                   "Cut a release branch first (e.g. release/v1.4.0), then PR develop → release/vX.Y.Z." \
+                   "develop cannot target $TARGET. develop must target a release/* branch (not main directly)."
+              ;;
+
+            release/*)
+              # release/* is promoted to main after UAT / sign-off.
+              if [[ "$TARGET" == "main" ]]; then
+                pass "release/* branches must target main"
+              fi
+              fail "Promotion path BLOCKED" \
+                   "release/* branches must target main, not \`$TARGET\`." \
+                   "Change the PR base branch to main." \
+                   "$SOURCE cannot target $TARGET. The allowed target for release/* branches is main."
+              ;;
+
+            *)
+              # Source branch matches no known Git Flow prefix.
+              fail "Branch naming violation" \
+                   "\`$SOURCE\` does not follow Git Flow naming. Allowed prefixes: feature/, bugfix/, hotfix/, release/." \
+                   "Rename your branch using one of the allowed prefixes." \
+                   "Branch $SOURCE does not follow Git Flow naming. Use feature/, bugfix/, hotfix/, or release/ prefix."
+              ;;
+          esac
