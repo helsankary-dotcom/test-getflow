@@ -22,7 +22,7 @@ on:
 
 jobs:
   validate:
-    uses: awaed-reusable-workflow/.github/.github/workflows/validate-pr-promotion.yml@main
+    uses: helsankary-dotcom/awaed-reusable-workflow/.github/workflows/validate-pr-promotion.yml@main
     with:
       head_ref: ${{ github.head_ref }}
       base_ref: ${{ github.base_ref }}
