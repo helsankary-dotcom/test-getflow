@@ -1,0 +1,28 @@
+# =============================================================================
+# validate-pr-promotion.yml (CALLER)
+#
+# Location: <every-repo>/.github/workflows/validate-pr-promotion.yml
+#
+# This is a thin wrapper. All logic lives in the central reusable workflow.
+# When the rules change, only the central repo is updated — not this file.
+#
+# Central repo: awaed/.github
+# (If using a different repo, change the 'uses' line below)
+# =============================================================================
+
+name: Validate PR Promotion Path
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches:
+      - main
+      - develop
+      - 'release/**'
+
+jobs:
+  validate:
+    uses: awaed-reusable-workflow/.github/.github/workflows/validate-pr-promotion.yml@main
+    with:
+      head_ref: ${{ github.head_ref }}
+      base_ref: ${{ github.base_ref }}
